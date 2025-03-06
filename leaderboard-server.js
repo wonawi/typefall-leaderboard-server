@@ -55,9 +55,13 @@ app.listen(PORT, () => {
     console.log(`🚀 Leaderboard API running on port ${PORT}`);
 });
 
-try {
-    const SERVICE_ACCOUNT_JSON = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-    console.log("✅ Private Key:", SERVICE_ACCOUNT_JSON.private_key);
-} catch (error) {
-    console.error("❌ Failed to parse service account JSON:", error);
-}
+app.get("/test-auth", async (req, res) => {
+    try {
+        const authClient = await auth.getClient();
+        const token = await authClient.getAccessToken();
+        res.json({ message: "✅ Google Auth Success!", accessToken: token.token });
+    } catch (error) {
+        console.error("❌ Google Auth Failed!", error);
+        res.status(500).json({ error: "Google Auth failed!", details: error.message });
+    }
+});
