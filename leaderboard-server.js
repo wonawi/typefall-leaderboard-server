@@ -9,7 +9,6 @@ const port = 3000;
 const SPREADSHEET_ID = "1pK0z2vmPTB0q2_iXEdWZrlzXNEJDCvFL61uknaAoPRA";
 const GLOBAL_SCORES_SHEET = "global_scores";
 const LEVEL_SCORES_SHEET = "level_scores";
-const SERVICE_ACCOUNT_FILE = "./api.json"; // Path to your service account credentials
 
 // Middleware
 app.use(cors());
