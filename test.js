@@ -6,7 +6,7 @@ const SERVER_URL = "https://typefall-leaderboard-server.onrender.com"; // Your A
 const testScore = {
     player_id: "test123",
     player_name: "TestPlayer",
-    score: Math.floor(Math.random() * 10000) + 1 // Random score for uniqueness
+    score: Math.floor(Math.random() * 10000) + 1 // Random score for  uniqueness
 };
 
 // Function to submit a test score
