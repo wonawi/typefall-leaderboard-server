@@ -23,10 +23,7 @@ app.use(express.json());
  * Authenticate with Google Sheets API using Service Account
  */
 async function authenticateGoogleSheets() {
-    const auth = new google.auth.GoogleAuth({
-        keyFile: SERVICE_ACCOUNT_FILE,
-        scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-    });
+    // Use the auth object that's already configured at the top level
     return google.sheets({ version: "v4", auth });
 }
 
