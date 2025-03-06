@@ -3,8 +3,8 @@ const express = require('express');
 const { google } = require('googleapis');
 const cors = require('cors');
 const app = express();
-//const PORT = process.env.PORT || 3000;
-const port = 3000;
+const PORT = process.env.PORT || 3000;
+//const port = 3000;
 
 
 // Constants
@@ -17,25 +17,6 @@ const auth = new google.auth.GoogleAuth({
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
-// Test route to check if server is running
-app.get("/", (req, res) => {
-    res.send("Leaderboard API is running!");
-});
-
-// Route to submit a score
-app.post("/submit-score", (req, res) => {
-    res.json({ message: "Score submitted!" });
-});
-
-// Route to get the leaderboard
-app.get("/leaderboard", (req, res) => {
-    res.json({ leaderboard: [{ player: "TestPlayer", score: 1000 }] });
-});
-
-// Start server
-app.listen(port, () => {
-    console.log(`🚀 Leaderboard API running on port ${port}`);
-});
 
 
 // Middleware
@@ -255,6 +236,26 @@ app.get('/level-leaderboard', async (req, res) => {
 });
 
 // Start the server
-app.listen(port, () => {
-    console.log(`TypeType Leaderboard API server running at http://localhost:${port}`);
+//app.listen(port, () => {
+//    console.log(`TypeType Leaderboard API server running at http://localhost:${port}`);
+//});
+
+// Test route to check if server is running
+app.get("/", (req, res) => {
+    res.send("Leaderboard API is running!");
+});
+
+// Route to submit a score
+app.post("/submit-score", (req, res) => {
+    res.json({ message: "Score submitted!" });
+});
+
+// Route to get the leaderboard
+app.get("/leaderboard", (req, res) => {
+    res.json({ leaderboard: [{ player: "TestPlayer", score: 1000 }] });
+});
+
+// Start server
+app.listen(PORT, () => {
+    console.log(`🚀 Leaderboard API running on port ${PORT}`);
 });
