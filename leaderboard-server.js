@@ -3,7 +3,7 @@ const express = require('express');
 const { google } = require('googleapis');
 const cors = require('cors');
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 // Constants
 const SPREADSHEET_ID = "1pK0z2vmPTB0q2_iXEdWZrlzXNEJDCvFL61uknaAoPRA";
@@ -14,6 +14,27 @@ const auth = new google.auth.GoogleAuth({
     credentials: SERVICE_ACCOUNT_JSON,
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
+
+// Test route to check if server is running
+app.get("/", (req, res) => {
+    res.send("Leaderboard API is running!");
+});
+
+// Route to submit a score
+app.post("/submit-score", (req, res) => {
+    res.json({ message: "Score submitted!" });
+});
+
+// Route to get the leaderboard
+app.get("/leaderboard", (req, res) => {
+    res.json({ leaderboard: [{ player: "TestPlayer", score: 1000 }] });
+});
+
+// Start server
+app.listen(PORT, () => {
+    console.log(`🚀 Leaderboard API running at http://localhost:${PORT}`);
+});
+
 
 // Middleware
 app.use(cors());
