@@ -54,3 +54,10 @@ app.get("/leaderboard", async (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Leaderboard API running on port ${PORT}`);
 });
+
+try {
+    const SERVICE_ACCOUNT_JSON = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+    console.log("✅ Private Key:", SERVICE_ACCOUNT_JSON.private_key);
+} catch (error) {
+    console.error("❌ Failed to parse service account JSON:", error);
+}
