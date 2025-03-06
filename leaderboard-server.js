@@ -3,7 +3,7 @@ const express = require('express');
 const { google } = require('googleapis');
 const cors = require('cors');
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
 // Constants
 const SPREADSHEET_ID = "1pK0z2vmPTB0q2_iXEdWZrlzXNEJDCvFL61uknaAoPRA";
@@ -32,7 +32,7 @@ app.get("/leaderboard", (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-    console.log(`🚀 Leaderboard API running at http://localhost:${PORT}`);
+    console.log(`🚀 Leaderboard API running on port ${PORT}`);
 });
 
 
