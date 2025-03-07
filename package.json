@@ -1,6 +1,6 @@
 {
   "name": "typefall-leaderboard-server",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "A leaderboard server for Godot using Google Sheets API",
   "main": "leaderboard-server.js",
   "scripts": {

@@ -1,3 +1,4 @@
+// TypeFall Leaderboard Server - Version 2.0.0
 const { google } = require("googleapis");
 const express = require("express");
 const cors = require("cors");
@@ -312,7 +313,7 @@ app.get("/leaderboard", async (req, res) => {
 
 // Test route to check if server is running
 app.get("/", (req, res) => {
-    res.send("Leaderboard API is running!");
+    res.send("TypeFall Leaderboard API v2.0.0 is running!");
 });
 
 // Endpoint to check the format of the service account JSON
@@ -380,7 +381,33 @@ app.get("/test-auth", async (req, res) => {
     }
 });
 
+
+app.get("/test-write", async (req, res) => {
+    try {
+        const sheets = google.sheets({ version: "v4", auth });
+        const request = {
+            spreadsheetId: SPREADSHEET_ID,
+            range: "global_scores!A2:B2", // Make sure this range is correct
+            valueInputOption: "RAW",
+            insertDataOption: "INSERT_ROWS",
+            resource: {
+                values: [["TestUser", 9999]] // Dummy data
+            }
+        };
+
+        const response = await sheets.spreadsheets.values.append(request);
+        console.log("✅ Write Test Successful!", response.data);
+        res.json({ message: "✅ Write Test Successful!", response: response.data });
+
+    } catch (error) {
+        console.error("❌ Write Test Failed:", error.response ? error.response.data : error.message);
+        res.status(500).json({ error: "Write Test Failed!", details: error.response ? error.response.data : error.message });
+    }
+});
+
+
 // Start server
 app.listen(PORT, () => {
-    console.log(`🚀 Leaderboard API running on port ${PORT}`);
+    console.log(`🚀 TypeFall Leaderboard API v2.0.0 running on port ${PORT}`);
 });
+
