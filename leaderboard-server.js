@@ -42,7 +42,144 @@ const auth = new google.auth.GoogleAuth({
 const SPREADSHEET_ID = "1pK0z2vmPTB0q2_iXEdWZrlzXNEJDCvFL61uknaAoPRA";
 const GLOBAL_SCORES_SHEET = "global_scores"; // Sheet for global scores
 const LEVEL_SCORES_SHEET = "level_scores"; // Sheet for level-specific scores
+const PLAYERS_SHEET = "players"; // Sheet for player information
 const SHEET_NAME = GLOBAL_SCORES_SHEET; // For backward compatibility
+
+/**
+ * Check if a player exists in the players sheet
+ * @param {string} player_id - The player ID to check
+ * @returns {Promise<{exists: boolean, index: number, data: any[]}>} Player data and row index
+ */
+async function checkPlayerExists(player_id) {
+    const sheets = await authenticateGoogleSheets();
+    const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: PLAYERS_SHEET
+    });
+    
+    const values = response.data.values || [];
+    const startIndex = values.length > 0 && values[0][0] === "player_id" ? 1 : 0;
+    
+    for (let i = startIndex; i < values.length; i++) {
+        if (values[i][0] === player_id) {
+            return { exists: true, index: i + 1, data: values[i] }; // +1 because sheets are 1-indexed
+        }
+    }
+    
+    return { exists: false, index: -1, data: null };
+}
+
+/**
+ * Create or update a player in the players sheet
+ * @param {string} player_id - The player ID
+ * @param {string} player_name - The player name
+ * @param {boolean} isNewPlayer - Whether this is a new player
+ * @returns {Promise<void>}
+ */
+async function createOrUpdatePlayer(player_id, player_name, isNewPlayer = false) {
+    const sheets = await authenticateGoogleSheets();
+    const timestamp = new Date().toISOString();
+    
+    // Check if player exists
+    const playerCheck = await checkPlayerExists(player_id);
+    
+    if (playerCheck.exists) {
+        // Update existing player
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${PLAYERS_SHEET}!B${playerCheck.index}`, // Update name
+            valueInputOption: "RAW",
+            resource: {
+                values: [[player_name]]
+            }
+        });
+        
+        // Update last_record timestamp
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${PLAYERS_SHEET}!D${playerCheck.index}`, // Update last_record
+            valueInputOption: "RAW",
+            resource: {
+                values: [[timestamp]]
+            }
+        });
+    } else {
+        // Create new player
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${PLAYERS_SHEET}!A:J`,
+            valueInputOption: "RAW",
+            insertDataOption: "INSERT_ROWS",
+            resource: {
+                values: [[
+                    player_id,
+                    player_name,
+                    timestamp, // created
+                    timestamp, // last_record
+                    0, // total_games
+                    0, // highest_score
+                    "", // hs_level
+                    "", // hs_difficulty
+                    "", // hs_language
+                    0  // hs_time
+                ]]
+            }
+        });
+    }
+}
+
+/**
+ * Update player statistics
+ * @param {string} player_id - The player ID
+ * @param {number} score - The score achieved
+ * @param {string} level_id - The level ID (optional)
+ * @param {string} difficulty - The difficulty (optional)
+ * @param {string} language - The language (optional)
+ * @param {number} time - The time taken (optional)
+ * @returns {Promise<void>}
+ */
+async function updatePlayerStats(player_id, score, level_id = "", difficulty = "", language = "", time = 0) {
+    const playerCheck = await checkPlayerExists(player_id);
+    
+    if (!playerCheck.exists) {
+        console.error(`Player ${player_id} not found for stats update`);
+        return;
+    }
+    
+    const sheets = await authenticateGoogleSheets();
+    const rowIndex = playerCheck.index;
+    
+    // Increment total_games
+    const currentGames = parseInt(playerCheck.data[4]) || 0;
+    await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${PLAYERS_SHEET}!E${rowIndex}`, // total_games
+        valueInputOption: "RAW",
+        resource: {
+            values: [[currentGames + 1]]
+        }
+    });
+    
+    // Update highest score if new score is higher
+    const currentHighScore = parseInt(playerCheck.data[5]) || 0;
+    if (score > currentHighScore) {
+        // Update highest score and related fields
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${PLAYERS_SHEET}!F${rowIndex}:J${rowIndex}`, // highest_score to hs_time
+            valueInputOption: "RAW",
+            resource: {
+                values: [[
+                    score,
+                    level_id,
+                    difficulty,
+                    language,
+                    time
+                ]]
+            }
+        });
+    }
+}
 
 /**
  * Function to authenticate with Google Sheets
@@ -82,44 +219,76 @@ app.get('/test-connection', async (req, res) => {
     }
 });
 
+
 /**
  * Submit global score
  */
-app.post('/global-score', async (req, res) => {
+app.post("/global-score", async (req, res) => {
+    console.log("🔥 Received global score submission:");
+    console.log("Body:", req.body); // Log received data
+
     try {
-        const { player_id, player_name, score } = req.body;
-        
-        if (!player_id || !player_name || score === undefined) {
-            return res.status(400).json({
-                success: false,
-                error: "Missing required fields: player_id, player_name, score"
-            });
+        const { player_id, player_name, total_score, total_games } = req.body;
+
+        // Check for missing fields
+        if (!player_id || !player_name || !total_score || !total_games) {
+            console.error("❌ Missing required fields:", req.body);
+            return res.status(400).json({ error: "Missing required fields" });
         }
-        
-        const timestamp = new Date().toISOString();
+
         const sheets = await authenticateGoogleSheets();
-        
+        const timestamp = new Date().toISOString();
+
+        // Add to global_scores sheet
         await sheets.spreadsheets.values.append({
             spreadsheetId: SPREADSHEET_ID,
-            range: `${GLOBAL_SCORES_SHEET}!A:D`,
-            valueInputOption: "USER_ENTERED",
+            range: `${GLOBAL_SCORES_SHEET}!A:E`,
+            valueInputOption: "RAW",
+            insertDataOption: "INSERT_ROWS",
             resource: {
-                values: [[player_id, player_name, score, timestamp]]
+                values: [[player_id, player_name, total_score, total_games, timestamp]]
             }
         });
         
-        res.json({
-            success: true,
-            message: "Global score submitted successfully"
-        });
+        // Create or update player in players sheet
+        await createOrUpdatePlayer(player_id, player_name);
+        
+        // Update player stats in players sheet
+        const playerCheck = await checkPlayerExists(player_id);
+        if (playerCheck.exists) {
+            // Set total_games directly
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: SPREADSHEET_ID,
+                range: `${PLAYERS_SHEET}!E${playerCheck.index}`, // total_games
+                valueInputOption: "RAW",
+                resource: {
+                    values: [[total_games]]
+                }
+            });
+            
+            // Update highest score if needed
+            const currentHighScore = parseInt(playerCheck.data[5]) || 0;
+            if (total_score > currentHighScore) {
+                await sheets.spreadsheets.values.update({
+                    spreadsheetId: SPREADSHEET_ID,
+                    range: `${PLAYERS_SHEET}!F${playerCheck.index}`, // highest_score
+                    valueInputOption: "RAW",
+                    resource: {
+                        values: [[total_score]]
+                    }
+                });
+            }
+        }
+
+        console.log("✅ Global score submitted successfully:", player_id, player_name, total_score);
+        res.json({ message: "Global score submitted successfully!" });
+
     } catch (error) {
-        console.error("Global score submission error:", error);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
+        console.error("❌ Error writing global score to Google Sheets:", error);
+        res.status(500).json({ error: "Failed to submit global score", details: error.message });
     }
 });
+
 
 /**
  * Submit level score
@@ -129,7 +298,7 @@ app.post("/level-score", async (req, res) => {
     console.log("Body:", req.body); // Log received data
 
     try {
-        const { player_id, player_name, level_id, language, difficulty, score } = req.body;
+        const { player_id, player_name, level_id, language, difficulty, score, time } = req.body;
 
         // Check for missing fields
         if (!player_id || !player_name || !level_id || !language || !difficulty || !score) {
@@ -137,18 +306,26 @@ app.post("/level-score", async (req, res) => {
             return res.status(400).json({ error: "Missing required fields" });
         }
 
-        const sheets = google.sheets({ version: "v4", auth });
-        const request = {
+        const sheets = await authenticateGoogleSheets();
+        const timestamp = new Date().toISOString();
+
+        // Add to level_scores sheet
+        await sheets.spreadsheets.values.append({
             spreadsheetId: SPREADSHEET_ID,
-            range: "level_scores!A2:F2", // Adjust range based on spreadsheet
+            range: `${LEVEL_SCORES_SHEET}!A:G`,
             valueInputOption: "RAW",
             insertDataOption: "INSERT_ROWS",
             resource: {
-                values: [[player_id, player_name, level_id, language, difficulty, score]]
+                values: [[player_id, player_name, level_id, language, difficulty, score, timestamp]]
             }
-        };
+        });
+        
+        // Create or update player in players sheet
+        await createOrUpdatePlayer(player_id, player_name);
+        
+        // Update player stats
+        await updatePlayerStats(player_id, score, level_id, difficulty, language, time || 0);
 
-        await sheets.spreadsheets.values.append(request);
         console.log("✅ Level score submitted successfully:", player_id, player_name, score);
         res.json({ message: "Level score submitted successfully!" });
 
@@ -158,42 +335,6 @@ app.post("/level-score", async (req, res) => {
     }
 });
 
-/**app.post('/level-score', async (req, res) => {
-    try {
-        const { player_id, player_name, level_id, language, difficulty, score } = req.body;
-        
-        if (!player_id || !player_name || !level_id || !language || !difficulty || score === undefined) {
-            return res.status(400).json({
-                success: false,
-                error: "Missing required fields"
-            });
-        }
-        
-        const timestamp = new Date().toISOString();
-        const sheets = await authenticateGoogleSheets();
-        
-        await sheets.spreadsheets.values.append({
-            spreadsheetId: SPREADSHEET_ID,
-            range: `${LEVEL_SCORES_SHEET}!A:G`,
-            valueInputOption: "USER_ENTERED",
-            resource: {
-                values: [[player_id, player_name, level_id, language, difficulty, score, timestamp]]
-            }
-        });
-        
-        res.json({
-            success: true,
-            message: "Level score submitted successfully"
-        });
-    } catch (error) {
-        console.error("Level score submission error:", error);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-});
-*/
 
 /**
  * Get global leaderboard
@@ -440,9 +581,215 @@ app.get("/test-write", async (req, res) => {
     }
 });
 
+/**
+ * Get player information
+ */
+app.get('/player-info', async (req, res) => {
+    try {
+        const { player_id } = req.query;
+        
+        if (!player_id) {
+            return res.status(400).json({
+                success: false,
+                error: "Missing required parameter: player_id"
+            });
+        }
+        
+        const playerCheck = await checkPlayerExists(player_id);
+        
+        if (!playerCheck.exists) {
+            return res.status(404).json({
+                success: false,
+                error: "Player not found"
+            });
+        }
+        
+        // Format player data
+        const playerData = {
+            player_id: playerCheck.data[0],
+            player_name: playerCheck.data[1],
+            created: playerCheck.data[2],
+            last_record: playerCheck.data[3],
+            total_games: parseInt(playerCheck.data[4]) || 0,
+            highest_score: parseInt(playerCheck.data[5]) || 0,
+            hs_level: playerCheck.data[6] || "",
+            hs_difficulty: playerCheck.data[7] || "",
+            hs_language: playerCheck.data[8] || "",
+            hs_time: parseInt(playerCheck.data[9]) || 0
+        };
+        
+        res.json(playerData);
+    } catch (error) {
+        console.error("Player info error:", error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Register a new player
+ */
+app.post('/register-player', async (req, res) => {
+    try {
+        const { player_id, player_name } = req.body;
+        
+        if (!player_id || !player_name) {
+            return res.status(400).json({
+                success: false,
+                error: "Missing required fields: player_id, player_name"
+            });
+        }
+        
+        // Check if player already exists
+        const playerCheck = await checkPlayerExists(player_id);
+        
+        if (playerCheck.exists) {
+            return res.status(409).json({
+                success: false,
+                error: "Player ID already exists"
+            });
+        }
+        
+        // Create new player
+        await createOrUpdatePlayer(player_id, player_name, true);
+        
+        res.json({
+            success: true,
+            message: "Player registered successfully"
+        });
+    } catch (error) {
+        console.error("Player registration error:", error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Update player information
+ */
+app.post('/update-player', async (req, res) => {
+    try {
+        const { player_id, player_name } = req.body;
+        
+        if (!player_id || !player_name) {
+            return res.status(400).json({
+                success: false,
+                error: "Missing required fields: player_id, player_name"
+            });
+        }
+        
+        // Check if player exists
+        const playerCheck = await checkPlayerExists(player_id);
+        
+        if (!playerCheck.exists) {
+            return res.status(404).json({
+                success: false,
+                error: "Player not found"
+            });
+        }
+        
+        // Update player
+        await createOrUpdatePlayer(player_id, player_name);
+        
+        res.json({
+            success: true,
+            message: "Player updated successfully"
+        });
+    } catch (error) {
+        console.error("Player update error:", error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Reset player data
+ */
+app.post('/reset-player', async (req, res) => {
+    try {
+        const { player_id, reset_type } = req.body;
+        
+        if (!player_id) {
+            return res.status(400).json({
+                success: false,
+                error: "Missing required field: player_id"
+            });
+        }
+        
+        // Check if player exists
+        const playerCheck = await checkPlayerExists(player_id);
+        
+        if (!playerCheck.exists) {
+            return res.status(404).json({
+                success: false,
+                error: "Player not found"
+            });
+        }
+        
+        const sheets = await authenticateGoogleSheets();
+        
+        if (reset_type === "full") {
+            // Delete player from players sheet
+            // Note: This is a simplistic approach - Google Sheets API doesn't have a direct "delete row" function
+            // A more robust solution would involve using batchUpdate with DeleteDimensionRequest
+            
+            // For now, we'll just clear the row data
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: SPREADSHEET_ID,
+                range: `${PLAYERS_SHEET}!A${playerCheck.index}:J${playerCheck.index}`,
+                valueInputOption: "RAW",
+                resource: {
+                    values: [["DELETED", "DELETED", "", "", "", "", "", "", "", ""]]
+                }
+            });
+            
+            res.json({
+                success: true,
+                message: "Player fully reset (marked as deleted)"
+            });
+        } else {
+            // Reset stats only
+            const timestamp = new Date().toISOString();
+            
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: SPREADSHEET_ID,
+                range: `${PLAYERS_SHEET}!D${playerCheck.index}:J${playerCheck.index}`,
+                valueInputOption: "RAW",
+                resource: {
+                    values: [[
+                        timestamp, // last_record
+                        0, // total_games
+                        0, // highest_score
+                        "", // hs_level
+                        "", // hs_difficulty
+                        "", // hs_language
+                        0  // hs_time
+                    ]]
+                }
+            });
+            
+            res.json({
+                success: true,
+                message: "Player statistics reset"
+            });
+        }
+    } catch (error) {
+        console.error("Player reset error:", error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
 
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 TypeFall Leaderboard API v2.0.0 running on port ${PORT}`);
 });
-
