@@ -5,7 +5,6 @@ const cors = require("cors");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-
 app.use(cors());
 app.use(express.json());
 
@@ -40,8 +39,23 @@ const auth = new google.auth.GoogleAuth({
 
 // Replace this with your actual Google Spreadsheet ID
 const SPREADSHEET_ID = "1pK0z2vmPTB0q2_iXEdWZrlzXNEJDCvFL61uknaAoPRA";
-const SHEET_NAME = "global_scores"; // Change to match your sheet name
+const GLOBAL_SCORES_SHEET = "global_scores"; // Sheet for global scores
+const LEVEL_SCORES_SHEET = "level_scores"; // Sheet for level-specific scores
+const SHEET_NAME = GLOBAL_SCORES_SHEET; // For backward compatibility
 
+/**
+ * Function to authenticate with Google Sheets
+ * @returns {Promise<Object>} Google Sheets API client
+ */
+async function authenticateGoogleSheets() {
+    try {
+        const sheets = google.sheets({ version: "v4", auth });
+        return sheets;
+    } catch (error) {
+        console.error("Authentication error:", error);
+        throw new Error(`Failed to authenticate with Google Sheets: ${error.message}`);
+    }
+}
 
 /**
  * Test connection to Google Sheets
@@ -247,29 +261,58 @@ app.get('/level-leaderboard', async (req, res) => {
     }
 });
 
-// Start the server
-//app.listen(port, () => {
-//    console.log(`TypeType Leaderboard API server running at http://localhost:${port}`);
-//});
+// Legacy route to fetch the leaderboard from Google Sheets
+app.get("/leaderboard", async (req, res) => {
+    try {
+        const sheets = google.sheets({ version: "v4", auth });
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${SHEET_NAME}!A2:C`, // Assuming A2:C contains player_id, player_name, score
+        });
+
+        const rows = response.data.values;
+        if (!rows || rows.length === 0) {
+            return res.json({ leaderboard: [] });
+        }
+
+        // Convert rows to a leaderboard format
+        const leaderboard = rows.map(row => ({
+            player_id: row[0] || "Unknown",
+            player_name: row[1] || "Anonymous",
+            score: parseInt(row[2]) || 0
+        }));
+
+        // Sort by highest score
+        leaderboard.sort((a, b) => b.score - a.score);
+
+        res.json({ leaderboard });
+    } catch (error) {
+        console.error("Error fetching leaderboard:", error);
+        
+        // More detailed error information
+        const errorDetails = {
+            message: error.message,
+            stack: error.stack,
+            code: error.code,
+        };
+        
+        if (error.response) {
+            errorDetails.response = {
+                status: error.response.status,
+                data: error.response.data
+            };
+        }
+        
+        res.status(500).json({ 
+            error: "Failed to fetch leaderboard", 
+            details: errorDetails
+        });
+    }
+});
 
 // Test route to check if server is running
 app.get("/", (req, res) => {
     res.send("Leaderboard API is running!");
-});
-
-// Route to submit a score
-app.post("/submit-score", (req, res) => {
-    res.json({ message: "Score submitted!" });
-});
-
-// Route to get the leaderboard
-app.get("/leaderboard", (req, res) => {
-    res.json({ leaderboard: [{ player: "TestPlayer", score: 1000 }] });
-});
-
-// Start server
-app.listen(PORT, () => {
-    console.log(`🚀 Leaderboard API running on port ${PORT}`);
 });
 
 // Endpoint to check the format of the service account JSON
@@ -335,4 +378,9 @@ app.get("/test-auth", async (req, res) => {
             details: errorDetails
         });
     }
+});
+
+// Start server
+app.listen(PORT, () => {
+    console.log(`🚀 Leaderboard API running on port ${PORT}`);
 });
