@@ -124,7 +124,41 @@ app.post('/global-score', async (req, res) => {
 /**
  * Submit level score
  */
-app.post('/level-score', async (req, res) => {
+app.post("/level-score", async (req, res) => {
+    console.log("🔥 Received level score submission:");
+    console.log("Body:", req.body); // Log received data
+
+    try {
+        const { player_id, player_name, level_id, language, difficulty, score } = req.body;
+
+        // Check for missing fields
+        if (!player_id || !player_name || !level_id || !language || !difficulty || !score) {
+            console.error("❌ Missing required fields:", req.body);
+            return res.status(400).json({ error: "Missing required fields" });
+        }
+
+        const sheets = google.sheets({ version: "v4", auth });
+        const request = {
+            spreadsheetId: SPREADSHEET_ID,
+            range: "level_scores!A2:F2", // Adjust range based on spreadsheet
+            valueInputOption: "RAW",
+            insertDataOption: "INSERT_ROWS",
+            resource: {
+                values: [[player_id, player_name, level_id, language, difficulty, score]]
+            }
+        };
+
+        await sheets.spreadsheets.values.append(request);
+        console.log("✅ Level score submitted successfully:", player_id, player_name, score);
+        res.json({ message: "Level score submitted successfully!" });
+
+    } catch (error) {
+        console.error("❌ Error writing level score to Google Sheets:", error);
+        res.status(500).json({ error: "Failed to submit level score", details: error.message });
+    }
+});
+
+/**app.post('/level-score', async (req, res) => {
     try {
         const { player_id, player_name, level_id, language, difficulty, score } = req.body;
         
@@ -159,6 +193,7 @@ app.post('/level-score', async (req, res) => {
         });
     }
 });
+*/
 
 /**
  * Get global leaderboard
