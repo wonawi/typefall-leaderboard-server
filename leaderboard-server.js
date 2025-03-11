@@ -811,6 +811,128 @@ app.post('/update-player', async (req, res) => {
 });
 
 /**
+ * Get sheet ID by name
+ * @param {string} sheetName - The name of the sheet
+ * @returns {Promise<number>} The sheet ID
+ */
+async function getSheetId(sheetName) {
+    const sheets = await authenticateGoogleSheets();
+    const response = await sheets.spreadsheets.get({
+        spreadsheetId: SPREADSHEET_ID
+    });
+    
+    for (const sheet of response.data.sheets) {
+        if (sheet.properties.title === sheetName) {
+            return sheet.properties.sheetId;
+        }
+    }
+    
+    throw new Error(`Sheet not found: ${sheetName}`);
+}
+
+/**
+ * Delete rows with matching player_id from a sheet
+ * @param {string} sheetName - The name of the sheet
+ * @param {string} player_id - The player ID to match
+ * @returns {Promise<number>} Number of rows deleted
+ */
+async function deleteRowsWithPlayerId(sheetName, player_id) {
+    const sheets = await authenticateGoogleSheets();
+    const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: sheetName
+    });
+    
+    const values = response.data.values || [];
+    const rowsToDelete = [];
+    
+    // Find all rows with matching player_id (column A)
+    for (let i = 0; i < values.length; i++) {
+        if (values[i][0] === player_id) {
+            rowsToDelete.push(i);
+        }
+    }
+    
+    if (rowsToDelete.length === 0) {
+        return 0;
+    }
+    
+    // Get sheet ID
+    const sheetId = await getSheetId(sheetName);
+    
+    // Delete rows in reverse order to avoid index shifting issues
+    const deleteRequests = [];
+    for (const rowIndex of rowsToDelete.sort((a, b) => b - a)) {
+        deleteRequests.push({
+            deleteDimension: {
+                range: {
+                    sheetId: sheetId,
+                    dimension: "ROWS",
+                    startIndex: rowIndex,
+                    endIndex: rowIndex + 1
+                }
+            }
+        });
+    }
+    
+    // Execute batch update
+    await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        resource: {
+            requests: deleteRequests
+        }
+    });
+    
+    return rowsToDelete.length;
+}
+
+/**
+ * Recalculate global positions for all players
+ * @returns {Promise<void>}
+ */
+async function recalculateGlobalPositions() {
+    const sheets = await authenticateGoogleSheets();
+    const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: PLAYERS_SHEET
+    });
+    
+    const values = response.data.values || [];
+    const startIndex = values.length > 0 && values[0][0] === "player_id" ? 1 : 0;
+    
+    // Format player data with total scores
+    const playerData = [];
+    for (let i = startIndex; i < values.length; i++) {
+        const row = values[i];
+        if (row.length >= 11) {
+            playerData.push({
+                player_id: row[0],
+                total_score: parseInt(row[10]) || 0,
+                row_index: i + 1 // +1 because sheets are 1-indexed
+            });
+        }
+    }
+    
+    // Sort by total_score (descending)
+    playerData.sort((a, b) => b.total_score - a.total_score);
+    
+    // Update global positions for all players
+    for (let i = 0; i < playerData.length; i++) {
+        const player = playerData[i];
+        const position = i + 1; // Position is 1-indexed
+        
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${PLAYERS_SHEET}!L${player.row_index}`, // global_position
+            valueInputOption: "RAW",
+            resource: {
+                values: [[position]]
+            }
+        });
+    }
+}
+
+/**
  * Reset player data
  */
 app.post('/reset-player', async (req, res) => {
@@ -837,23 +959,29 @@ app.post('/reset-player', async (req, res) => {
         const sheets = await authenticateGoogleSheets();
         
         if (reset_type === "full") {
-            // Delete player from players sheet
-            // Note: This is a simplistic approach - Google Sheets API doesn't have a direct "delete row" function
-            // A more robust solution would involve using batchUpdate with DeleteDimensionRequest
+            console.log(`🗑️ Performing full reset for player ${player_id}`);
             
-            // For now, we'll just clear the row data
-            await sheets.spreadsheets.values.update({
-                spreadsheetId: SPREADSHEET_ID,
-                range: `${PLAYERS_SHEET}!A${playerCheck.index}:L${playerCheck.index}`,
-                valueInputOption: "RAW",
-                resource: {
-                    values: [["DELETED", "DELETED", "", "", "", "", "", "", "", "", 0, 0]]
-                }
-            });
+            // Delete player from all sheets
+            const deletedFromPlayers = await deleteRowsWithPlayerId(PLAYERS_SHEET, player_id);
+            const deletedFromGlobalScores = await deleteRowsWithPlayerId(GLOBAL_SCORES_SHEET, player_id);
+            const deletedFromLevelScores = await deleteRowsWithPlayerId(LEVEL_SCORES_SHEET, player_id);
+            
+            console.log(`✅ Deleted ${deletedFromPlayers} rows from ${PLAYERS_SHEET}`);
+            console.log(`✅ Deleted ${deletedFromGlobalScores} rows from ${GLOBAL_SCORES_SHEET}`);
+            console.log(`✅ Deleted ${deletedFromLevelScores} rows from ${LEVEL_SCORES_SHEET}`);
+            
+            // Recalculate global positions
+            await recalculateGlobalPositions();
+            console.log(`✅ Recalculated global positions`);
             
             res.json({
                 success: true,
-                message: "Player fully reset (marked as deleted)"
+                message: "Player fully reset (all data deleted)",
+                details: {
+                    players_rows_deleted: deletedFromPlayers,
+                    global_scores_rows_deleted: deletedFromGlobalScores,
+                    level_scores_rows_deleted: deletedFromLevelScores
+                }
             });
         } else {
             // Reset stats only
@@ -877,6 +1005,9 @@ app.post('/reset-player', async (req, res) => {
                     ]]
                 }
             });
+            
+            // Recalculate global positions
+            await recalculateGlobalPositions();
             
             res.json({
                 success: true,
