@@ -244,10 +244,10 @@ app.post("/global-score", async (req, res) => {
     console.log("Body:", req.body); // Log received data
 
     try {
-        const { player_id, player_name, total_score, total_games } = req.body;
+        const { nickname, total_score, total_games = 1 } = req.body;
 
         // Check for missing fields
-        if (!player_id || !player_name || !total_score || !total_games) {
+        if (!nickname || !total_score) {
             console.error("❌ Missing required fields:", req.body);
             return res.status(400).json({ error: "Missing required fields" });
         }
@@ -258,126 +258,47 @@ app.post("/global-score", async (req, res) => {
         // Add to global_scores sheet
         await sheets.spreadsheets.values.append({
             spreadsheetId: SPREADSHEET_ID,
-            range: `${GLOBAL_SCORES_SHEET}!A:E`,
+            range: `${GLOBAL_SCORES_SHEET}!A:D`,
             valueInputOption: "RAW",
             insertDataOption: "INSERT_ROWS",
             resource: {
-                values: [[player_id, player_name, total_score, total_games, timestamp]]
+                values: [[nickname, total_score, total_games, timestamp]]
             }
         });
         
-        // Create or update player in players sheet with total_score
-        const playerCheck = await checkPlayerExists(player_id);
-        
-        if (playerCheck.exists) {
-            // Update player name
-            await sheets.spreadsheets.values.update({
-                spreadsheetId: SPREADSHEET_ID,
-                range: `${PLAYERS_SHEET}!B${playerCheck.index}`, // player_name
-                valueInputOption: "RAW",
-                resource: {
-                    values: [[player_name]]
-                }
-            });
-            
-            // Update last_record timestamp
-            await sheets.spreadsheets.values.update({
-                spreadsheetId: SPREADSHEET_ID,
-                range: `${PLAYERS_SHEET}!D${playerCheck.index}`, // last_record
-                valueInputOption: "RAW",
-                resource: {
-                    values: [[timestamp]]
-                }
-            });
-            
-            // Set total_games directly
-            await sheets.spreadsheets.values.update({
-                spreadsheetId: SPREADSHEET_ID,
-                range: `${PLAYERS_SHEET}!E${playerCheck.index}`, // total_games
-                valueInputOption: "RAW",
-                resource: {
-                    values: [[total_games]]
-                }
-            });
-            
-            // Update highest score if needed
-            const currentHighScore = parseInt(playerCheck.data[5]) || 0;
-            if (total_score > currentHighScore) {
-                await sheets.spreadsheets.values.update({
-                    spreadsheetId: SPREADSHEET_ID,
-                    range: `${PLAYERS_SHEET}!F${playerCheck.index}`, // highest_score
-                    valueInputOption: "RAW",
-                    resource: {
-                        values: [[total_score]]
-                    }
-                });
-            }
-            
-            // Update total_score
-            const currentTotalScore = parseInt(playerCheck.data[10]) || 0;
-            if (total_score > currentTotalScore) {
-                await sheets.spreadsheets.values.update({
-                    spreadsheetId: SPREADSHEET_ID,
-                    range: `${PLAYERS_SHEET}!K${playerCheck.index}`, // total_score
-                    valueInputOption: "RAW",
-                    resource: {
-                        values: [[total_score]]
-                    }
-                });
-            }
-        } else {
-            // Create new player with total_score
-            await createOrUpdatePlayer(player_id, player_name, true, total_score, 0);
-        }
-        
-        // Get all players to calculate positions
-        const allPlayersResponse = await sheets.spreadsheets.values.get({
+        // Get all global scores to calculate position
+        const scoresResponse = await sheets.spreadsheets.values.get({
             spreadsheetId: SPREADSHEET_ID,
-            range: PLAYERS_SHEET
+            range: GLOBAL_SCORES_SHEET
         });
         
-        const allPlayers = allPlayersResponse.data.values || [];
-        const startIndex = allPlayers.length > 0 && allPlayers[0][0] === "player_id" ? 1 : 0;
+        const scores = scoresResponse.data.values || [];
+        const startIndex = scores.length > 0 && scores[0][0] === "nickname" ? 1 : 0;
         
-        // Format player data with total scores
-        const playerData = [];
-        for (let i = startIndex; i < allPlayers.length; i++) {
-            const row = allPlayers[i];
-            if (row.length >= 11 && row[0] !== "DELETED") {
-                playerData.push({
-                    player_id: row[0],
-                    player_name: row[1],
-                    total_score: parseInt(row[10]) || 0,
-                    row_index: i + 1 // +1 because sheets are 1-indexed
+        // Format score data
+        const scoreData = [];
+        for (let i = startIndex; i < scores.length; i++) {
+            const row = scores[i];
+            if (row.length >= 2) {
+                scoreData.push({
+                    nickname: row[0],
+                    score: parseInt(row[1]) || 0
                 });
             }
         }
         
-        // Sort by total_score (descending)
-        playerData.sort((a, b) => b.total_score - a.total_score);
+        // Sort by score (descending)
+        scoreData.sort((a, b) => b.score - a.score);
         
-        // Update global positions for all players
-        for (let i = 0; i < playerData.length; i++) {
-            const player = playerData[i];
-            const position = i + 1; // Position is 1-indexed
-            
-            await sheets.spreadsheets.values.update({
-                spreadsheetId: SPREADSHEET_ID,
-                range: `${PLAYERS_SHEET}!L${player.row_index}`, // global_position
-                valueInputOption: "RAW",
-                resource: {
-                    values: [[position]]
-                }
-            });
-        }
-        
-        // Find the current player's position
-        const playerPosition = playerData.findIndex(p => p.player_id === player_id) + 1;
+        // Find the current entry's position
+        const position = scoreData.findIndex(entry => 
+            entry.nickname === nickname && entry.score === total_score
+        ) + 1;
 
-        console.log("✅ Global score submitted and positions updated successfully:", player_id, player_name, total_score);
+        console.log("✅ Global score submitted successfully:", nickname, total_score);
         res.json({ 
-            message: "Global score submitted and positions updated successfully!",
-            player_position: playerPosition
+            message: "Global score submitted successfully!",
+            position: position > 0 ? position : null
         });
 
     } catch (error) {
@@ -395,10 +316,10 @@ app.post("/level-score", async (req, res) => {
     console.log("Body:", req.body); // Log received data
 
     try {
-        const { player_id, player_name, level_id, language, difficulty, score, time } = req.body;
+        const { nickname, level_id, language, difficulty, score, time = 0 } = req.body;
 
         // Check for missing fields
-        if (!player_id || !player_name || !level_id || !language || !difficulty || !score) {
+        if (!nickname || !level_id || !language || !difficulty || !score) {
             console.error("❌ Missing required fields:", req.body);
             return res.status(400).json({ error: "Missing required fields" });
         }
@@ -409,22 +330,52 @@ app.post("/level-score", async (req, res) => {
         // Add to level_scores sheet
         await sheets.spreadsheets.values.append({
             spreadsheetId: SPREADSHEET_ID,
-            range: `${LEVEL_SCORES_SHEET}!A:G`,
+            range: `${LEVEL_SCORES_SHEET}!A:F`,
             valueInputOption: "RAW",
             insertDataOption: "INSERT_ROWS",
             resource: {
-                values: [[player_id, player_name, level_id, language, difficulty, score, timestamp]]
+                values: [[nickname, level_id, language, difficulty, score, timestamp]]
             }
         });
-        
-        // Create or update player in players sheet
-        await createOrUpdatePlayer(player_id, player_name);
-        
-        // Update player stats
-        await updatePlayerStats(player_id, score, level_id, difficulty, language, time || 0);
 
-        console.log("✅ Level score submitted successfully:", player_id, player_name, score);
-        res.json({ message: "Level score submitted successfully!" });
+        // Get all scores for this level to calculate position
+        const levelScoresResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: LEVEL_SCORES_SHEET
+        });
+        
+        const allScores = levelScoresResponse.data.values || [];
+        const startIndex = allScores.length > 0 && allScores[0][0] === "nickname" ? 1 : 0;
+        
+        // Filter and format scores for this level, language, and difficulty
+        const levelScores = [];
+        for (let i = startIndex; i < allScores.length; i++) {
+            const row = allScores[i];
+            if (row.length >= 5 && 
+                row[1] === level_id && 
+                row[2] === language && 
+                row[3] === difficulty) {
+                
+                levelScores.push({
+                    nickname: row[0],
+                    score: parseInt(row[4]) || 0
+                });
+            }
+        }
+        
+        // Sort by score (descending)
+        levelScores.sort((a, b) => b.score - a.score);
+        
+        // Find the current entry's position
+        const position = levelScores.findIndex(entry => 
+            entry.nickname === nickname && entry.score === score
+        ) + 1;
+
+        console.log("✅ Level score submitted successfully:", nickname, score);
+        res.json({ 
+            message: "Level score submitted successfully!",
+            position: position > 0 ? position : null
+        });
 
     } catch (error) {
         console.error("❌ Error writing level score to Google Sheets:", error);
@@ -438,32 +389,47 @@ app.post("/level-score", async (req, res) => {
  */
 app.get('/global-leaderboard', async (req, res) => {
     try {
-        // Get all player data with total scores from players sheet
+        // Get all global scores
         const sheets = await authenticateGoogleSheets();
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId: SPREADSHEET_ID,
-            range: PLAYERS_SHEET
+            range: GLOBAL_SCORES_SHEET
         });
         
         const values = response.data.values || [];
-        const startIndex = values.length > 0 && values[0][0] === "player_id" ? 1 : 0;
+        const startIndex = values.length > 0 && values[0][0] === "nickname" ? 1 : 0;
         
         // Format data for the client
-        const formattedData = [];
+        const scoreMap = new Map(); // Use a map to consolidate scores by nickname
+        
         for (let i = startIndex; i < values.length; i++) {
             const row = values[i];
-            if (row.length >= 11 && row[0] !== "DELETED") {
-                formattedData.push({
-                    player_id: row[0],
-                    player_name: row[1],
-                    total_score: parseInt(row[10]) || 0,
-                    global_position: parseInt(row[11]) || 0
-                });
+            if (row.length >= 2) {
+                const nickname = row[0];
+                const score = parseInt(row[1]) || 0;
+                
+                // Keep only the highest score for each nickname
+                if (!scoreMap.has(nickname) || score > scoreMap.get(nickname).score) {
+                    scoreMap.set(nickname, {
+                        nickname: nickname,
+                        score: score,
+                        timestamp: row.length > 3 ? row[3] : ""
+                    });
+                }
             }
         }
         
-        // Sort by total_score (descending)
-        formattedData.sort((a, b) => b.total_score - a.total_score);
+        // Convert map to array
+        let formattedData = Array.from(scoreMap.values());
+        
+        // Sort by score (descending)
+        formattedData.sort((a, b) => b.score - a.score);
+        
+        // Add position to each entry
+        formattedData = formattedData.map((entry, index) => ({
+            ...entry,
+            position: index + 1
+        }));
         
         // Limit to top 100
         const topEntries = formattedData.slice(0, 100);
@@ -501,34 +467,54 @@ app.get('/level-leaderboard', async (req, res) => {
         const values = response.data.values || [];
         
         // Skip header row if present
-        const startIndex = values.length > 0 && values[0][0] === "player_id" ? 1 : 0;
+        const startIndex = values.length > 0 && values[0][0] === "nickname" ? 1 : 0;
         
-        // Format and filter data for the client
-        const formattedData = [];
+        // Use a map to consolidate scores by nickname (keeping highest score)
+        const scoreMap = new Map();
+        
         for (let i = startIndex; i < values.length; i++) {
             const row = values[i];
-            if (row.length >= 6) {
+            if (row.length >= 5) {
                 // Filter by level_id, language, and difficulty if provided
-                if (row[2] === level_id && 
-                    (!language || row[3] === language) && 
-                    (!difficulty || row[4] === difficulty)) {
+                if (row[1] === level_id && 
+                    (!language || row[2] === language) && 
+                    (!difficulty || row[3] === difficulty)) {
                     
-                    formattedData.push({
-                        player_name: row[1],
-                        level_id: row[2],
-                        language: row[3],
-                        difficulty: row[4],
-                        score: parseInt(row[5]) || 0,
-                        timestamp: row.length > 6 ? row[6] : ""
-                    });
+                    const nickname = row[0];
+                    const score = parseInt(row[4]) || 0;
+                    const timestamp = row.length > 5 ? row[5] : "";
+                    
+                    // Keep only the highest score for each nickname
+                    if (!scoreMap.has(nickname) || score > scoreMap.get(nickname).score) {
+                        scoreMap.set(nickname, {
+                            nickname: nickname,
+                            level_id: row[1],
+                            language: row[2],
+                            difficulty: row[3],
+                            score: score,
+                            timestamp: timestamp
+                        });
+                    }
                 }
             }
         }
         
+        // Convert map to array
+        let formattedData = Array.from(scoreMap.values());
+        
         // Sort by score (descending)
         formattedData.sort((a, b) => b.score - a.score);
         
-        res.json(formattedData);
+        // Add position to each entry
+        formattedData = formattedData.map((entry, index) => ({
+            ...entry,
+            position: index + 1
+        }));
+        
+        // Limit to top 100
+        const topEntries = formattedData.slice(0, 100);
+        
+        res.json(topEntries);
     } catch (error) {
         console.error("Level leaderboard error:", error);
         res.status(500).json({
@@ -831,12 +817,13 @@ async function getSheetId(sheetName) {
 }
 
 /**
- * Delete rows with matching player_id from a sheet
+ * Delete rows with matching identifier from a sheet
  * @param {string} sheetName - The name of the sheet
- * @param {string} player_id - The player ID to match
+ * @param {string} identifier - The identifier to match (player_id or nickname)
+ * @param {boolean} isNickname - Whether the identifier is a nickname
  * @returns {Promise<number>} Number of rows deleted
  */
-async function deleteRowsWithPlayerId(sheetName, player_id) {
+async function deleteRowsWithIdentifier(sheetName, identifier, isNickname = false) {
     const sheets = await authenticateGoogleSheets();
     const response = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
@@ -846,9 +833,9 @@ async function deleteRowsWithPlayerId(sheetName, player_id) {
     const values = response.data.values || [];
     const rowsToDelete = [];
     
-    // Find all rows with matching player_id (column A)
+    // Find all rows with matching identifier (column A)
     for (let i = 0; i < values.length; i++) {
-        if (values[i][0] === player_id) {
+        if (values[i][0] === identifier) {
             rowsToDelete.push(i);
         }
     }
@@ -884,6 +871,26 @@ async function deleteRowsWithPlayerId(sheetName, player_id) {
     });
     
     return rowsToDelete.length;
+}
+
+/**
+ * Delete rows with matching player_id from a sheet (legacy function)
+ * @param {string} sheetName - The name of the sheet
+ * @param {string} player_id - The player ID to match
+ * @returns {Promise<number>} Number of rows deleted
+ */
+async function deleteRowsWithPlayerId(sheetName, player_id) {
+    return deleteRowsWithIdentifier(sheetName, player_id, false);
+}
+
+/**
+ * Delete rows with matching nickname from a sheet
+ * @param {string} sheetName - The name of the sheet
+ * @param {string} nickname - The nickname to match
+ * @returns {Promise<number>} Number of rows deleted
+ */
+async function deleteRowsWithNickname(sheetName, nickname) {
+    return deleteRowsWithIdentifier(sheetName, nickname, true);
 }
 
 /**
@@ -933,7 +940,47 @@ async function recalculateGlobalPositions() {
 }
 
 /**
- * Reset player data
+ * Reset nickname data
+ */
+app.post('/reset-nickname', async (req, res) => {
+    try {
+        const { nickname } = req.body;
+        
+        if (!nickname) {
+            return res.status(400).json({
+                success: false,
+                error: "Missing required field: nickname"
+            });
+        }
+        
+        console.log(`🗑️ Performing reset for nickname ${nickname}`);
+        
+        // Delete entries from global_scores and level_scores sheets
+        const deletedFromGlobalScores = await deleteRowsWithNickname(GLOBAL_SCORES_SHEET, nickname);
+        const deletedFromLevelScores = await deleteRowsWithNickname(LEVEL_SCORES_SHEET, nickname);
+        
+        console.log(`✅ Deleted ${deletedFromGlobalScores} rows from ${GLOBAL_SCORES_SHEET}`);
+        console.log(`✅ Deleted ${deletedFromLevelScores} rows from ${LEVEL_SCORES_SHEET}`);
+        
+        res.json({
+            success: true,
+            message: "Nickname data reset (all scores deleted)",
+            details: {
+                global_scores_rows_deleted: deletedFromGlobalScores,
+                level_scores_rows_deleted: deletedFromLevelScores
+            }
+        });
+    } catch (error) {
+        console.error("Nickname reset error:", error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Reset player data (legacy endpoint)
  */
 app.post('/reset-player', async (req, res) => {
     try {
@@ -961,8 +1008,13 @@ app.post('/reset-player', async (req, res) => {
         if (reset_type === "full") {
             console.log(`🗑️ Performing full reset for player ${player_id}`);
             
+            // Get player name before deleting
+            const player_name = playerCheck.data[1];
+            
             // Delete player from all sheets
             const deletedFromPlayers = await deleteRowsWithPlayerId(PLAYERS_SHEET, player_id);
+            
+            // For backward compatibility, try to delete from global_scores and level_scores using player_id
             const deletedFromGlobalScores = await deleteRowsWithPlayerId(GLOBAL_SCORES_SHEET, player_id);
             const deletedFromLevelScores = await deleteRowsWithPlayerId(LEVEL_SCORES_SHEET, player_id);
             
