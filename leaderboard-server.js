@@ -74,9 +74,11 @@ async function checkPlayerExists(player_id) {
  * @param {string} player_id - The player ID
  * @param {string} player_name - The player name
  * @param {boolean} isNewPlayer - Whether this is a new player
+ * @param {number} total_score - The player's total score (optional)
+ * @param {number} global_position - The player's global position (optional)
  * @returns {Promise<void>}
  */
-async function createOrUpdatePlayer(player_id, player_name, isNewPlayer = false) {
+async function createOrUpdatePlayer(player_id, player_name, isNewPlayer = false, total_score = 0, global_position = 0) {
     const sheets = await authenticateGoogleSheets();
     const timestamp = new Date().toISOString();
     
@@ -103,11 +105,23 @@ async function createOrUpdatePlayer(player_id, player_name, isNewPlayer = false)
                 values: [[timestamp]]
             }
         });
+        
+        // Update total_score and global_position if provided
+        if (total_score > 0 || global_position > 0) {
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: SPREADSHEET_ID,
+                range: `${PLAYERS_SHEET}!K${playerCheck.index}:L${playerCheck.index}`,
+                valueInputOption: "RAW",
+                resource: {
+                    values: [[total_score || 0, global_position || 0]]
+                }
+            });
+        }
     } else {
         // Create new player
         await sheets.spreadsheets.values.append({
             spreadsheetId: SPREADSHEET_ID,
-            range: `${PLAYERS_SHEET}!A:J`,
+            range: `${PLAYERS_SHEET}!A:L`,
             valueInputOption: "RAW",
             insertDataOption: "INSERT_ROWS",
             resource: {
@@ -121,7 +135,9 @@ async function createOrUpdatePlayer(player_id, player_name, isNewPlayer = false)
                     "", // hs_level
                     "", // hs_difficulty
                     "", // hs_language
-                    0  // hs_time
+                    0,  // hs_time
+                    total_score || 0, // total_score
+                    global_position || 0 // global_position
                 ]]
             }
         });
@@ -250,12 +266,30 @@ app.post("/global-score", async (req, res) => {
             }
         });
         
-        // Create or update player in players sheet
-        await createOrUpdatePlayer(player_id, player_name);
-        
-        // Update player stats in players sheet
+        // Create or update player in players sheet with total_score
         const playerCheck = await checkPlayerExists(player_id);
+        
         if (playerCheck.exists) {
+            // Update player name
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: SPREADSHEET_ID,
+                range: `${PLAYERS_SHEET}!B${playerCheck.index}`, // player_name
+                valueInputOption: "RAW",
+                resource: {
+                    values: [[player_name]]
+                }
+            });
+            
+            // Update last_record timestamp
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: SPREADSHEET_ID,
+                range: `${PLAYERS_SHEET}!D${playerCheck.index}`, // last_record
+                valueInputOption: "RAW",
+                resource: {
+                    values: [[timestamp]]
+                }
+            });
+            
             // Set total_games directly
             await sheets.spreadsheets.values.update({
                 spreadsheetId: SPREADSHEET_ID,
@@ -278,14 +312,77 @@ app.post("/global-score", async (req, res) => {
                     }
                 });
             }
+            
+            // Update total_score
+            const currentTotalScore = parseInt(playerCheck.data[10]) || 0;
+            if (total_score > currentTotalScore) {
+                await sheets.spreadsheets.values.update({
+                    spreadsheetId: SPREADSHEET_ID,
+                    range: `${PLAYERS_SHEET}!K${playerCheck.index}`, // total_score
+                    valueInputOption: "RAW",
+                    resource: {
+                        values: [[total_score]]
+                    }
+                });
+            }
+        } else {
+            // Create new player with total_score
+            await createOrUpdatePlayer(player_id, player_name, true, total_score, 0);
         }
+        
+        // Get all players to calculate positions
+        const allPlayersResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: PLAYERS_SHEET
+        });
+        
+        const allPlayers = allPlayersResponse.data.values || [];
+        const startIndex = allPlayers.length > 0 && allPlayers[0][0] === "player_id" ? 1 : 0;
+        
+        // Format player data with total scores
+        const playerData = [];
+        for (let i = startIndex; i < allPlayers.length; i++) {
+            const row = allPlayers[i];
+            if (row.length >= 11 && row[0] !== "DELETED") {
+                playerData.push({
+                    player_id: row[0],
+                    player_name: row[1],
+                    total_score: parseInt(row[10]) || 0,
+                    row_index: i + 1 // +1 because sheets are 1-indexed
+                });
+            }
+        }
+        
+        // Sort by total_score (descending)
+        playerData.sort((a, b) => b.total_score - a.total_score);
+        
+        // Update global positions for all players
+        for (let i = 0; i < playerData.length; i++) {
+            const player = playerData[i];
+            const position = i + 1; // Position is 1-indexed
+            
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: SPREADSHEET_ID,
+                range: `${PLAYERS_SHEET}!L${player.row_index}`, // global_position
+                valueInputOption: "RAW",
+                resource: {
+                    values: [[position]]
+                }
+            });
+        }
+        
+        // Find the current player's position
+        const playerPosition = playerData.findIndex(p => p.player_id === player_id) + 1;
 
-        console.log("✅ Global score submitted successfully:", player_id, player_name, total_score);
-        res.json({ message: "Global score submitted successfully!" });
+        console.log("✅ Global score submitted and positions updated successfully:", player_id, player_name, total_score);
+        res.json({ 
+            message: "Global score submitted and positions updated successfully!",
+            player_position: playerPosition
+        });
 
     } catch (error) {
-        console.error("❌ Error writing global score to Google Sheets:", error);
-        res.status(500).json({ error: "Failed to submit global score", details: error.message });
+        console.error("❌ Error processing global score:", error);
+        res.status(500).json({ error: "Failed to process global score", details: error.message });
     }
 });
 
@@ -341,34 +438,37 @@ app.post("/level-score", async (req, res) => {
  */
 app.get('/global-leaderboard', async (req, res) => {
     try {
+        // Get all player data with total scores from players sheet
         const sheets = await authenticateGoogleSheets();
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId: SPREADSHEET_ID,
-            range: GLOBAL_SCORES_SHEET
+            range: PLAYERS_SHEET
         });
         
         const values = response.data.values || [];
-        
-        // Skip header row if present
         const startIndex = values.length > 0 && values[0][0] === "player_id" ? 1 : 0;
         
         // Format data for the client
         const formattedData = [];
         for (let i = startIndex; i < values.length; i++) {
             const row = values[i];
-            if (row.length >= 3) {
+            if (row.length >= 11 && row[0] !== "DELETED") {
                 formattedData.push({
+                    player_id: row[0],
                     player_name: row[1],
-                    score: parseInt(row[2]) || 0,
-                    timestamp: row.length > 3 ? row[3] : ""
+                    total_score: parseInt(row[10]) || 0,
+                    global_position: parseInt(row[11]) || 0
                 });
             }
         }
         
-        // Sort by score (descending)
-        formattedData.sort((a, b) => b.score - a.score);
+        // Sort by total_score (descending)
+        formattedData.sort((a, b) => b.total_score - a.total_score);
         
-        res.json(formattedData);
+        // Limit to top 100
+        const topEntries = formattedData.slice(0, 100);
+        
+        res.json(topEntries);
     } catch (error) {
         console.error("Global leaderboard error:", error);
         res.status(500).json({
@@ -604,7 +704,7 @@ app.get('/player-info', async (req, res) => {
             });
         }
         
-        // Format player data
+        // Format player data with new fields
         const playerData = {
             player_id: playerCheck.data[0],
             player_name: playerCheck.data[1],
@@ -615,7 +715,9 @@ app.get('/player-info', async (req, res) => {
             hs_level: playerCheck.data[6] || "",
             hs_difficulty: playerCheck.data[7] || "",
             hs_language: playerCheck.data[8] || "",
-            hs_time: parseInt(playerCheck.data[9]) || 0
+            hs_time: parseInt(playerCheck.data[9]) || 0,
+            total_score: parseInt(playerCheck.data[10]) || 0,
+            global_position: parseInt(playerCheck.data[11]) || 0
         };
         
         res.json(playerData);
@@ -742,10 +844,10 @@ app.post('/reset-player', async (req, res) => {
             // For now, we'll just clear the row data
             await sheets.spreadsheets.values.update({
                 spreadsheetId: SPREADSHEET_ID,
-                range: `${PLAYERS_SHEET}!A${playerCheck.index}:J${playerCheck.index}`,
+                range: `${PLAYERS_SHEET}!A${playerCheck.index}:L${playerCheck.index}`,
                 valueInputOption: "RAW",
                 resource: {
-                    values: [["DELETED", "DELETED", "", "", "", "", "", "", "", ""]]
+                    values: [["DELETED", "DELETED", "", "", "", "", "", "", "", "", 0, 0]]
                 }
             });
             
@@ -759,7 +861,7 @@ app.post('/reset-player', async (req, res) => {
             
             await sheets.spreadsheets.values.update({
                 spreadsheetId: SPREADSHEET_ID,
-                range: `${PLAYERS_SHEET}!D${playerCheck.index}:J${playerCheck.index}`,
+                range: `${PLAYERS_SHEET}!D${playerCheck.index}:L${playerCheck.index}`,
                 valueInputOption: "RAW",
                 resource: {
                     values: [[
@@ -769,7 +871,9 @@ app.post('/reset-player', async (req, res) => {
                         "", // hs_level
                         "", // hs_difficulty
                         "", // hs_language
-                        0  // hs_time
+                        0,  // hs_time
+                        0,  // total_score
+                        0   // global_position
                     ]]
                 }
             });
