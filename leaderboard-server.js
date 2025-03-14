@@ -686,16 +686,55 @@ async function updatePlayerTotalScore(player_id, player_name) {
             await createOrUpdatePlayer(player_id, player_name, true, totalScore, 0, completedLevels);
         }
         
-        // Update the global scores sheet with player_name
-        await sheets.spreadsheets.values.append({
+        // Check if player already has an entry in global_scores
+        const globalScoresResponse = await sheets.spreadsheets.values.get({
             spreadsheetId: SPREADSHEET_ID,
-            range: `${GLOBAL_SCORES_SHEET}!A:F`, // A:F for 6 columns
-            valueInputOption: "RAW",
-            insertDataOption: "INSERT_ROWS",
-            resource: {
-                values: [[0, player_id, player_name, totalScore, completedLevels, new Date().toISOString()]]
-            }
+            range: GLOBAL_SCORES_SHEET
         });
+        
+        const globalValues = globalScoresResponse.data.values || [];
+        const globalStartIndex = globalValues.length > 0 && globalValues[0][0] === "position_global" ? 1 : 0;
+        
+        // Find the player's latest entry
+        let existingEntry = null;
+        let existingEntryIndex = -1;
+        
+        for (let i = globalStartIndex; i < globalValues.length; i++) {
+            const row = globalValues[i];
+            if (row.length >= 2 && row[1] === player_id) {
+                existingEntry = row;
+                existingEntryIndex = i + 1; // +1 because sheets are 1-indexed
+            }
+        }
+        
+        const timestamp = new Date().toISOString();
+        
+        if (existingEntry && existingEntryIndex > 0) {
+            // Update existing entry
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: SPREADSHEET_ID,
+                range: `${GLOBAL_SCORES_SHEET}!D${existingEntryIndex}:F${existingEntryIndex}`,
+                valueInputOption: "RAW",
+                resource: {
+                    values: [[totalScore, completedLevels, timestamp]]
+                }
+            });
+            
+            console.log(`Updated existing global score entry for ${player_name}: ${totalScore}`);
+        } else {
+            // Create new entry if none exists
+            await sheets.spreadsheets.values.append({
+                spreadsheetId: SPREADSHEET_ID,
+                range: `${GLOBAL_SCORES_SHEET}!A:F`, // A:F for 6 columns
+                valueInputOption: "RAW",
+                insertDataOption: "INSERT_ROWS",
+                resource: {
+                    values: [[0, player_id, player_name, totalScore, completedLevels, timestamp]]
+                }
+            });
+            
+            console.log(`Created new global score entry for ${player_name}: ${totalScore}`);
+        }
         
         // Recalculate global positions
         await recalculateGlobalPositions();
