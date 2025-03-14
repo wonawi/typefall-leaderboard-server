@@ -709,7 +709,17 @@ async function updatePlayerTotalScore(player_id, player_name) {
         
         const timestamp = new Date().toISOString();
         
+        console.log(`🔍 Global score update for ${player_name}:`);
+        console.log(`  Total score: ${totalScore}`);
+        console.log(`  Levels completed: ${completedLevels}`);
+        console.log(`  Existing entry found: ${existingEntry ? 'Yes' : 'No'}`);
+        
         if (existingEntry && existingEntryIndex > 0) {
+            console.log(`  Existing entry details:`);
+            console.log(`    Row index: ${existingEntryIndex}`);
+            console.log(`    Current score: ${existingEntry[3] || 0}`);
+            console.log(`    Current levels completed: ${existingEntry[4] || 0}`);
+            
             // Update existing entry
             await sheets.spreadsheets.values.update({
                 spreadsheetId: SPREADSHEET_ID,
@@ -720,7 +730,7 @@ async function updatePlayerTotalScore(player_id, player_name) {
                 }
             });
             
-            console.log(`Updated existing global score entry for ${player_name}: ${totalScore}`);
+            console.log(`✅ Updated existing global score entry for ${player_name}: ${totalScore}`);
         } else {
             // Create new entry if none exists
             await sheets.spreadsheets.values.append({
@@ -733,7 +743,7 @@ async function updatePlayerTotalScore(player_id, player_name) {
                 }
             });
             
-            console.log(`Created new global score entry for ${player_name}: ${totalScore}`);
+            console.log(`✅ Created new global score entry for ${player_name}: ${totalScore}`);
         }
         
         // Recalculate global positions
